@@ -11,7 +11,11 @@ class Settings(BaseSettings):
     gmail_token_encryption_key: str = ""
     oauth_state_secret: str = ""
     frontend_url: str = "http://localhost:3000"
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=(".env.local", "../.env.local", ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     @property
     def allowed_origins(self) -> list[str]:

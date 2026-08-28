@@ -63,5 +63,6 @@ def callback(code: str = Query(...), state: str = Query(...)):
 def status(user_id: str = Depends(require_user)):
     if not settings.supabase_url or not settings.supabase_service_role_key:
         return {"configured": False, "connected": False}
-    result = create_client(settings.supabase_url, settings.supabase_service_role_key).table("gmail_connections").select("email_address,connected_at").eq("user_id", user_id).maybe_single().execute()
-    return {"configured": configured(), "connected": bool(result.data), "connection": result.data}
+    result = create_client(settings.supabase_url, settings.supabase_service_role_key).table("gmail_connections").select("email_address,connected_at").eq("user_id", user_id).limit(1).execute()
+    connection = result.data[0] if result and result.data else None
+    return {"configured": configured(), "connected": connection is not None, "connection": connection}
