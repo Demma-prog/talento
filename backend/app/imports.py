@@ -1,5 +1,7 @@
 import base64
 import hashlib
+import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parseaddr
 
@@ -13,7 +15,8 @@ from supabase import create_client
 
 from .auth import require_user
 from .extraction import CandidateExtraction, extract_candidate, normalize_email, normalize_phone
-from .photos import extract_and_store_photo
+from .photos import extract_and_store_photo_from_cv_result
+from .retention import cleanup_expired_candidates
 from .settings import settings
 
 
@@ -21,13 +24,28 @@ router = APIRouter(prefix="/imports", tags=["imports"])
 CV_QUERY = "has:attachment {filename:pdf filename:doc filename:docx}"
 CV_EXTENSIONS = (".pdf", ".doc", ".docx")
 
+def _friendly_error(exc: Exception) -> str:
+    message = str(exc).lower()
+    if "429" in message or "quota" in message or "resource_exhausted" in message: return "Quota gratuita Gemini esaurita: riprova dopo il rinnovo"
+    if "doc meno recenti" in message: return "Formato DOC non supportato: convertire in PDF o DOCX"
+    return "Analisi non riuscita; il CV potrà essere ritentato"
+
 
 class ImportRequest(BaseModel):
     max_messages: int = Field(default=10, ge=1, le=20)
+    page_token: str | None = None
+    after_epoch: int | None = None
 
 
 class ProcessRequest(BaseModel):
     message_ids: list[str] = Field(min_length=1, max_length=3)
+
+
+class CheckpointRequest(BaseModel):
+    next_page_token: str | None = None
+    after_epoch: int | None = None
+    processed_count: int = Field(default=0, ge=0)
+    complete: bool = False
 
 
 def _header(headers: list[dict], name: str) -> str:
@@ -40,7 +58,7 @@ def _attachments(part: dict) -> list[dict]:
     filename = part.get("filename", "")
     body = part.get("body", {})
     if filename.lower().endswith(CV_EXTENSIONS) and body.get("attachmentId"):
-        found.append({"filename": filename, "attachment_id": body["attachmentId"]})
+        found.append({"filename": filename, "attachment_id": body["attachmentId"], "size": body.get("size", 0)})
     for child in part.get("parts", []):
         found.extend(_attachments(child))
     return found
@@ -65,6 +83,16 @@ def _gmail_service(user_id: str):
     )
     credentials.refresh(Request())
     return build("gmail", "v1", credentials=credentials, cache_discovery=False), database
+
+
+def _choose_cv_attachment(attachments: list[dict]) -> dict | None:
+    if not attachments:
+        return None
+    def score(item: dict):
+        name = item["filename"].lower()
+        hint = 2 if "curriculum" in name else 1 if "cv" in name else 0
+        return hint, item.get("size", 0)
+    return max(attachments, key=score)
 
 
 def _safe_date(value: str | None) -> str | None:
@@ -117,16 +145,12 @@ def _save_sections(database, candidate_id: str, extracted: CandidateExtraction):
         } for row in extracted.skills]).execute()
 
 
-def _process_attachment(service, database, message: dict, attachment: dict):
+def _process_attachment_data(database, message: dict, attachment: dict, data: bytes):
     message_id = message["id"]
     already = database.table("candidates").select("id").eq("latest_gmail_message_id", message_id).limit(1).execute()
     if already.data:
         return "duplicate", None
 
-    encoded = service.users().messages().attachments().get(
-        userId="me", messageId=message_id, id=attachment["attachment_id"]
-    ).execute().get("data", "")
-    data = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
     extracted = extract_candidate(data, attachment["filename"])
     headers = message.get("payload", {}).get("headers", [])
     sender = _header(headers, "From")
@@ -161,22 +185,81 @@ def _process_attachment(service, database, message: dict, attachment: dict):
         candidate_id, outcome = saved.data[0]["id"], "imported"
     _save_sections(database, candidate_id, extracted)
     try:
-        extract_and_store_photo(database, candidate_id, data, attachment["filename"])
+        extract_and_store_photo_from_cv_result(database, candidate_id, data, attachment["filename"], extracted)
     except Exception:
         pass
     return outcome, candidate_id
 
 
+def _process_attachment(service, database, message: dict, attachment: dict):
+    encoded = service.users().messages().attachments().get(
+        userId="me", messageId=message["id"], id=attachment["attachment_id"]
+    ).execute().get("data", "")
+    data = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+    return _process_attachment_data(database, message, attachment, data)
+
+
+def _process_downloaded(message: dict, attachment: dict, data: bytes):
+    database = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    return _process_attachment_data(database, message, attachment, data)
+
+
+@router.post("/position")
+def import_position(user_id: str = Depends(require_user)):
+    database = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    result = database.table("import_runs").select(
+        "status,gmail_cursor,completed_at"
+    ).eq("requested_by", user_id).in_(
+        "status", ["archive_checkpoint", "archive_complete"]
+    ).order("created_at", desc=True).limit(1).execute()
+    if not result.data:
+        return {"mode": "archive", "page_token": None, "after_epoch": None}
+    latest = result.data[0]
+    if latest["status"] == "archive_checkpoint":
+        try:
+            cursor = json.loads(latest.get("gmail_cursor") or "{}")
+        except json.JSONDecodeError:
+            cursor = {"page_token": latest.get("gmail_cursor"), "after_epoch": None}
+        return {"mode": "resume", "page_token": cursor.get("page_token"), "after_epoch": cursor.get("after_epoch")}
+    completed = datetime.fromisoformat(latest["completed_at"].replace("Z", "+00:00"))
+    return {
+        "mode": "incremental", "page_token": None,
+        "after_epoch": max(0, int(completed.timestamp()) - 86400),
+    }
+
+
+@router.post("/checkpoint")
+def save_checkpoint(payload: CheckpointRequest, user_id: str = Depends(require_user)):
+    database = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    now = datetime.now(timezone.utc).isoformat()
+    database.table("import_runs").insert({
+        "requested_by": user_id,
+        "status": "archive_complete" if payload.complete else "archive_checkpoint",
+        "gmail_cursor": json.dumps({
+            "page_token": payload.next_page_token,
+            "after_epoch": payload.after_epoch,
+        }),
+        "found_count": payload.processed_count,
+        "completed_at": now,
+    }).execute()
+    return {"saved": True, "complete": payload.complete}
+
+
 @router.post("")
 def scan_cv_messages(payload: ImportRequest, user_id: str = Depends(require_user)):
     service, database = _gmail_service(user_id)
+    expired_removed = cleanup_expired_candidates(database)
     run = database.table("import_runs").insert({"requested_by": user_id, "status": "running"}).execute()
     run_id = run.data[0]["id"] if run.data else None
 
     try:
-        listing = service.users().messages().list(
-            userId="me", q=CV_QUERY, maxResults=payload.max_messages
-        ).execute()
+        query = CV_QUERY
+        if payload.after_epoch:
+            query += f" after:{payload.after_epoch}"
+        request = {"userId": "me", "q": query, "maxResults": payload.max_messages}
+        if payload.page_token:
+            request["pageToken"] = payload.page_token
+        listing = service.users().messages().list(**request).execute()
         previews = []
         for item in listing.get("messages", []):
             message = service.users().messages().get(userId="me", id=item["id"], format="full").execute()
@@ -194,10 +277,12 @@ def scan_cv_messages(payload: ImportRequest, user_id: str = Depends(require_user
                 "attachments": [{"filename": attachment["filename"]} for attachment in attachments],
             })
 
+        next_page_token = listing.get("nextPageToken")
         if run_id:
             database.table("import_runs").update({
                 "status": "scanned",
                 "found_count": len(previews),
+                "gmail_cursor": next_page_token,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
             }).eq("id", run_id).execute()
         return {
@@ -205,6 +290,10 @@ def scan_cv_messages(payload: ImportRequest, user_id: str = Depends(require_user
             "run_id": run_id,
             "found_count": len(previews),
             "messages": previews,
+            "next_page_token": next_page_token,
+            "has_more": bool(next_page_token),
+            "estimated_total": listing.get("resultSizeEstimate", len(previews)),
+            "expired_removed": expired_removed,
             "message": "Scansione Gmail completata. Nessun CV è stato ancora inviato a Gemini.",
         }
     except HTTPException:
@@ -228,22 +317,37 @@ def process_cv_messages(payload: ProcessRequest, user_id: str = Depends(require_
     counts = {"imported": 0, "updated": 0, "duplicate": 0, "failed": 0}
     candidates = []
     errors = []
+    prepared = []
     for message_id in payload.message_ids:
         try:
             message = service.users().messages().get(userId="me", id=message_id, format="full").execute()
-            attachments = _attachments(message.get("payload", {}))
-            for attachment in attachments:
-                try:
-                    outcome, candidate_id = _process_attachment(service, database, message, attachment)
-                    counts[outcome] += 1
-                    if candidate_id:
-                        candidates.append(candidate_id)
-                except Exception:
-                    counts["failed"] += 1
-                    errors.append(attachment["filename"])
-        except Exception:
+            attachment = _choose_cv_attachment(_attachments(message.get("payload", {})))
+            if not attachment:
+                raise ValueError("Nessun allegato CV")
+            encoded = service.users().messages().attachments().get(
+                userId="me", messageId=message_id, id=attachment["attachment_id"]
+            ).execute().get("data", "")
+            data = base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
+            prepared.append((message, attachment, data))
+        except Exception as exc:
             counts["failed"] += 1
-            errors.append(message_id)
+            errors.append(f"Email {message_id}: {_friendly_error(exc)}")
+
+    with ThreadPoolExecutor(max_workers=min(3, len(prepared)) or 1) as executor:
+        futures = {
+            executor.submit(_process_downloaded, message, attachment, data): attachment
+            for message, attachment, data in prepared
+        }
+        for future in as_completed(futures):
+            attachment = futures[future]
+            try:
+                outcome, candidate_id = future.result()
+                counts[outcome] += 1
+                if candidate_id:
+                    candidates.append(candidate_id)
+            except Exception as exc:
+                counts["failed"] += 1
+                errors.append(f"{attachment['filename']}: {_friendly_error(exc)}")
 
     if run_id:
         database.table("import_runs").update({

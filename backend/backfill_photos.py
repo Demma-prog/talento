@@ -14,10 +14,19 @@ service, database = _gmail_service(connections[0]["user_id"])
 candidates = database.table("candidates").select(
     "id,latest_gmail_message_id,latest_attachment_id,latest_cv_filename"
 ).execute().data or []
+try:
+    stored = database.storage.from_("candidate-photos").list(options={"limit": 1000})
+    existing = {item["name"].removesuffix(".webp") for item in stored if item.get("name", "").endswith(".webp")}
+except Exception:
+    existing = set()
 found = 0
 missing = 0
+skipped = 0
 errors = {}
 for candidate in candidates:
+    if candidate["id"] in existing:
+        skipped += 1
+        continue
     try:
         attachment = service.users().messages().attachments().get(
             userId="me",
@@ -33,6 +42,7 @@ for candidate in candidates:
         key = f"{type(exc).__name__}: {str(exc)[:160]}"
         errors[key] = errors.get(key, 0) + 1
 print(f"FOTO_ESTRATTE: {found}")
+print(f"FOTO_GIA_PRESENTI: {skipped}")
 print(f"SENZA_FOTO_AFFIDABILE: {missing}")
 for error, count in errors.items():
     print(f"ERRORE ({count}): {error}")

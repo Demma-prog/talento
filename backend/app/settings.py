@@ -4,6 +4,7 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_service_role_key: str = ""
     gemini_api_key: str = ""
+    gemini_model: str = "gemini-3.5-flash-lite"
     google_client_id: str = ""
     google_client_secret: str = ""
     google_refresh_token: str = ""

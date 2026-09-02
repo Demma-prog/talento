@@ -1,58 +1,120 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { createClient } from "@/lib/supabase/client";
-import { CheckCircle2, FileSearch, Inbox, LoaderCircle, Mail, Play, RotateCcw, ShieldCheck, Sparkles } from "lucide-react";
+import { CheckCircle2, FileSearch, Inbox, LoaderCircle, Mail, Play, RotateCcw, ShieldCheck, Sparkles, Square } from "lucide-react";
 
-type ScanMessage = { message_id: string; subject: string; sender: string; received_at: string; attachments: { filename: string }[] };
-type ScanResult = { found_count: number; messages: ScanMessage[]; message: string };
-type ProcessResult = { imported: number; updated: number; duplicate: number; failed: number };
+type ScanMessage={message_id:string;subject:string;sender:string;received_at:string;attachments:{filename:string}[]};
+type ScanResult={found_count:number;messages:ScanMessage[];next_page_token:string|null;has_more:boolean;estimated_total:number};
+type Totals={imported:number;updated:number;duplicate:number;failed:number};
+const emptyTotals:Totals={imported:0,updated:0,duplicate:0,failed:0};
 
-export default function ImportPage() {
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<ScanResult | null>(null);
-  const [processResult, setProcessResult] = useState<ProcessResult | null>(null);
-  const [error, setError] = useState("");
+export default function ImportPage(){
+  const [running,setRunning]=useState(false);
+  const [complete,setComplete]=useState(false);
+  const [phase,setPhase]=useState("Pronto per iniziare");
+  const [currentPage,setCurrentPage]=useState<ScanResult|null>(null);
+  const [pageNumber,setPageNumber]=useState(0);
+  const [pageProcessed,setPageProcessed]=useState(0);
+  const [overallProcessed,setOverallProcessed]=useState(0);
+  const [estimatedTotal,setEstimatedTotal]=useState(0);
+  const [queryAfterEpoch,setQueryAfterEpoch]=useState<number|null>(null);
+  const [totals,setTotals]=useState<Totals>(emptyTotals);
+  const [error,setError]=useState("");
+  const [importErrors,setImportErrors]=useState<string[]>([]);
+  const cancelRequested=useRef(false);
 
-  async function scan() {
-    setRunning(true); setError(""); setProcessResult(null);
-    try {
-      const api = process.env.NEXT_PUBLIC_API_URL;
-      if (!api) throw new Error("Backend non configurato");
-      const { data } = await createClient().auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) throw new Error("Sessione scaduta: accedi nuovamente");
-      const response = await fetch(`${api}/imports`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ max_messages: 10 }) });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.detail ?? "Scansione non riuscita");
-      setResult(body);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Scansione non riuscita"); }
-    finally { setRunning(false); }
+  async function accessToken(){const {data}=await createClient().auth.getSession();if(!data.session)throw new Error("Sessione scaduta: accedi nuovamente");return data.session.access_token}
+  async function apiRequest(path:string,body:unknown,retries=20):Promise<any>{
+    const api=process.env.NEXT_PUBLIC_API_URL;if(!api)throw new Error("Backend non configurato");
+    let lastError:Error|null=null;
+    for(let attempt=0;attempt<=retries;attempt++){
+      if(cancelRequested.current)throw new Error("Importazione interrotta");
+      try{
+        const response=await fetch(`${api}${path}`,{method:"POST",headers:{Authorization:`Bearer ${await accessToken()}`,"Content-Type":"application/json"},body:JSON.stringify(body)});
+        const data=await response.json().catch(()=>({detail:`Errore temporaneo del backend (${response.status})`}));
+        if(response.ok)return data;
+        const retryable=response.status===408||response.status===429||response.status>=500;
+        if(!retryable){const fatal=new Error(data.detail??"Operazione non riuscita") as Error&{fatal?:boolean};fatal.fatal=true;throw fatal}
+        lastError=new Error(data.detail??`Backend temporaneamente non disponibile (${response.status})`);
+      }catch(cause){if(cause instanceof Error&&(cause as Error&{fatal?:boolean}).fatal)throw cause;lastError=cause instanceof Error?cause:new Error("Connessione temporaneamente non disponibile")}
+      if(attempt<retries){
+        const seconds=Math.min(10,2+attempt);
+        setPhase(`Connessione temporaneamente assente · nuovo tentativo tra ${seconds}s`);
+        await new Promise(resolve=>setTimeout(resolve,seconds*1000));
+      }
+    }
+    throw lastError;
   }
-
-  async function processCvs() {
-    if (!result?.messages.length) return;
-    setRunning(true); setError("");
-    try {
-      const api = process.env.NEXT_PUBLIC_API_URL;
-      if (!api) throw new Error("Backend non configurato");
-      const { data } = await createClient().auth.getSession();
-      const token = data.session?.access_token;
-      if (!token) throw new Error("Sessione scaduta: accedi nuovamente");
-      const response = await fetch(`${api}/imports/process`, { method: "POST", headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" }, body: JSON.stringify({ message_ids: result.messages.slice(0, 3).map(message=>message.message_id) }) });
-      const body = await response.json();
-      if (!response.ok) throw new Error(body.detail ?? "Importazione non riuscita");
-      setProcessResult(body);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "Importazione non riuscita"); }
-    finally { setRunning(false); }
+  function stop(){cancelRequested.current=true;setPhase("Interruzione dopo il gruppo corrente...")}
+  async function start(){
+    cancelRequested.current=false;setRunning(true);setComplete(false);setError("");setImportErrors([]);setTotals(emptyTotals);setOverallProcessed(0);setEstimatedTotal(0);setPageNumber(0);setCurrentPage(null);
+    let cursor:string|null=null;let afterEpoch:number|null=null;let page=0;let processed=0;let estimate=0;let session={...emptyTotals};
+    try{
+      setPhase("Recupero dell’ultimo punto raggiunto...");
+      const position=await apiRequest("/imports/position",{});
+      cursor=position.page_token;afterEpoch=position.after_epoch;setQueryAfterEpoch(afterEpoch);
+      do{
+        if(cancelRequested.current)break;
+        setPhase("Ricerca delle email con curriculum...");
+        const scan:ScanResult=await apiRequest("/imports",{max_messages:10,page_token:cursor,after_epoch:afterEpoch});
+        page+=1;setPageNumber(page);setCurrentPage(scan);setPageProcessed(0);
+        estimate=Math.max(estimate,scan.estimated_total||0,processed+scan.messages.length);setEstimatedTotal(estimate);
+        for(let offset=0;offset<scan.messages.length;offset+=3){
+          if(cancelRequested.current)break;
+          const batch=scan.messages.slice(offset,offset+3);
+          setPhase(`Analisi dei CV ${processed+1}–${processed+batch.length}...`);
+          const result=await apiRequest("/imports/process",{message_ids:batch.map(item=>item.message_id)});
+          if(result.errors?.length){setImportErrors(current=>[...current,...result.errors]);setError(result.errors.join(" • "))}
+          session={imported:session.imported+result.imported,updated:session.updated+result.updated,duplicate:session.duplicate+result.duplicate,failed:session.failed+result.failed};
+          if(result.failed)throw new Error(result.errors.join(" • "));
+          processed+=batch.length;setTotals(session);setOverallProcessed(processed);setPageProcessed(Math.min(offset+batch.length,scan.messages.length));
+        }
+        if(!cancelRequested.current)await apiRequest("/imports/checkpoint",{next_page_token:scan.next_page_token,after_epoch:afterEpoch,processed_count:processed,complete:!scan.next_page_token});
+        cursor=scan.next_page_token;
+        if(cancelRequested.current)break;
+      }while(cursor);
+      if(cancelRequested.current){setPhase("Importazione interrotta");setComplete(false)}
+      else{setPhase("Importazione completata");setComplete(true);setOverallProcessed(value=>Math.max(value,estimate))}
+    }catch(cause){setError(cause instanceof Error?cause.message:"Importazione non riuscita");setPhase("Importazione sospesa")}
+    finally{setRunning(false)}
   }
+  async function resume(){
+    if(!currentPage)return start();
+    cancelRequested.current=false;setRunning(true);setComplete(false);setError("");
+    let scan=currentPage;let page=pageNumber;let processed=overallProcessed;let estimate=estimatedTotal;let session={...totals};let firstOffset=pageProcessed;
+    try{
+      while(true){
+        for(let offset=firstOffset;offset<scan.messages.length;offset+=3){
+          if(cancelRequested.current)break;
+          const batch=scan.messages.slice(offset,offset+3);
+          setPhase(`Analisi dei CV ${processed+1}–${processed+batch.length}...`);
+          const result=await apiRequest("/imports/process",{message_ids:batch.map(item=>item.message_id)});
+          if(result.errors?.length){setImportErrors(current=>[...current,...result.errors]);setError(result.errors.join(" • "))}
+          session={imported:session.imported+result.imported,updated:session.updated+result.updated,duplicate:session.duplicate+result.duplicate,failed:session.failed+result.failed};
+          if(result.failed)throw new Error(result.errors.join(" • "));
+          processed+=batch.length;setTotals(session);setOverallProcessed(processed);setPageProcessed(Math.min(offset+batch.length,scan.messages.length));
+        }
+        if(!cancelRequested.current)await apiRequest("/imports/checkpoint",{next_page_token:scan.next_page_token,after_epoch:queryAfterEpoch,processed_count:processed,complete:!scan.next_page_token});
+        if(cancelRequested.current||!scan.next_page_token)break;
+        setPhase("Ricerca delle email con curriculum...");
+        scan=await apiRequest("/imports",{max_messages:10,page_token:scan.next_page_token,after_epoch:queryAfterEpoch});
+        page+=1;firstOffset=0;estimate=Math.max(estimate,scan.estimated_total||0,processed+scan.messages.length);
+        setCurrentPage(scan);setPageNumber(page);setPageProcessed(0);setEstimatedTotal(estimate);
+      }
+      if(cancelRequested.current){setPhase("Importazione interrotta")}
+      else{setPhase("Importazione completata");setComplete(true);setOverallProcessed(value=>Math.max(value,estimate))}
+    }catch(cause){setError(cause instanceof Error?cause.message:"Importazione non riuscita");setPhase("Importazione sospesa")}
+    finally{setRunning(false)}
+  }
+  const progress=complete?100:estimatedTotal?Math.min(99,Math.round(overallProcessed/estimatedTotal*100)):0;
 
   return <AppShell title="Importa curriculum" active="Importa CV">
-    <section className="import-hero panel"><span className="import-icon"><Inbox/></span><div><p className="eyebrow">Sincronizzazione manuale</p><h2>Importa i nuovi CV da Gmail</h2><p>Per questa prima verifica cerchiamo fino a 10 email con allegati PDF o Word, senza inviare ancora documenti a Gemini.</p></div><button className="primary-button purple-button" disabled={running} onClick={scan}>{running?<><LoaderCircle className="spin"/> Ricerca...</>:<><Play/> Cerca CV su Gmail</>}</button></section>
-    {error && <section className="import-feedback import-error"><strong>Scansione non riuscita</strong><span>{error}</span></section>}
-    {result && <section className="panel scan-results"><div className="panel-head"><div><p className="eyebrow">Verifica Gmail completata</p><h3>{result.found_count} email con CV trovate</h3></div><CheckCircle2 className="result-check"/></div><p className="scan-note">{result.message}</p><div className="scan-list">{result.messages.map(message=><article key={message.message_id}><span className="candidate-avatar lavender"><Mail size={17}/></span><div><strong>{message.subject}</strong><p>{message.sender}</p></div><div className="scan-files">{message.attachments.map(file=><span key={file.filename}>{file.filename}</span>)}</div></article>)}</div>{result.messages.length>0&&!processResult&&<button className="primary-button purple-button process-button" disabled={running} onClick={processCvs}>{running?<><LoaderCircle className="spin"/> Analisi...</>:<><Sparkles/> Analizza i primi {Math.min(3,result.messages.length)} CV</>}</button>}{processResult&&<div className="process-summary"><strong>Importazione completata</strong><span>Nuovi: {processResult.imported}</span><span>Aggiornati: {processResult.updated}</span><span>Già presenti: {processResult.duplicate}</span><span>Errori: {processResult.failed}</span></div>}</section>}
-    <section className="import-grid"><article className="panel import-process"><div className="panel-head"><div><p className="eyebrow">Come funziona</p><h3>Processo di importazione</h3></div></div>{[[Mail,"Legge le nuove email","Ricerca solo i messaggi con allegati PDF o Word."],[FileSearch,"Estrae i dati","Legge il CV e struttura esperienze, istruzione e contatti."],[Sparkles,"Organizza con Gemini","Compila le card e segnala i campi che richiedono verifica."],[CheckCircle2,"Salva senza duplicati","Aggiorna la scheda esistente quando trova un CV più recente."]].map(([Icon,title,copy],i)=>{const I=Icon as typeof Mail;return <div className="process-step" key={String(title)}><span>{i+1}</span><i><I size={20}/></i><div><strong>{String(title)}</strong><p>{String(copy)}</p></div></div>})}</article>
-      <aside><article className="panel sync-card"><p className="eyebrow">Ultima attività</p><h3>Sincronizzazione</h3><div className="sync-stat"><span>Ultima scansione</span><b>{result?"Appena eseguita":"Non ancora eseguita"}</b></div><div className="sync-stat"><span>Email trovate</span><b>{result?.found_count??0}</b></div><div className="sync-stat"><span>Errori</span><b>{error?1:0}</b></div><button className="secondary-button full" disabled={running} onClick={scan}><RotateCcw size={15}/> Controlla collegamento</button></article><article className="privacy-note"><ShieldCheck/><div><strong>Elaborazione protetta</strong><p>In questa fase leggiamo soltanto i metadati degli allegati. I CV restano archiviati in Gmail.</p></div></article></aside></section>
-  </AppShell>;
+    <section className="import-hero panel"><span className="import-icon"><Inbox/></span><div><p className="eyebrow">Importazione automatica</p><h2>Importa e organizza tutti i CV</h2><p>Un solo clic avvia l’intero archivio. Il sistema gestisce autonomamente i piccoli gruppi necessari per rispettare i limiti dei servizi gratuiti.</p></div>{running?<button className="secondary-button stop-import" onClick={stop}><Square size={15}/> Interrompi</button>:<button className="primary-button purple-button" onClick={overallProcessed&&!complete?resume:start}><Play/> {overallProcessed&&!complete?"Riprendi importazione":"Avvia importazione"}</button>}</section>
+    <section className="panel automatic-progress"><div className="panel-head"><div><p className="eyebrow">Stato del processo</p><h3>{phase}</h3></div><strong className="progress-percent">{progress}%</strong></div><div className="overall-progress"><i style={{width:`${progress}%`}}/></div><div className="progress-metrics"><span><b>{overallProcessed}</b>Email elaborate</span><span><b>{estimatedTotal||"—"}</b>Email stimate</span><span><b>{pageNumber||"—"}</b>Pagina Gmail</span><span><b>{currentPage?`${pageProcessed}/${currentPage.messages.length}`:"—"}</b>Blocco corrente</span></div>{error&&<div className="import-feedback import-error"><strong>Processo sospeso</strong><span>{error}</span></div>}{complete&&<div className="import-complete wide-complete"><CheckCircle2/> Tutte le email individuate sono state esaminate.</div>}</section>
+    {currentPage&&running&&<section className="panel current-batch"><div className="panel-head"><div><p className="eyebrow">Elaborazione in corso</p><h3>Pagina Gmail {pageNumber}</h3></div><LoaderCircle className="spin result-check"/></div><div className="scan-list compact-scan">{currentPage.messages.map((message,index)=><article key={message.message_id} className={index<pageProcessed?"scan-processed":""}><span className="candidate-avatar lavender">{index<pageProcessed?<CheckCircle2 size={17}/>:<Mail size={17}/>}</span><div><strong>{message.subject}</strong><p>{message.sender}</p></div><div className="scan-files">{message.attachments.map(file=><span key={file.filename}>{file.filename}</span>)}</div></article>)}</div></section>}
+    <section className="import-grid"><article className="panel import-process"><div className="panel-head"><div><p className="eyebrow">Processo automatico</p><h3>Cosa sta facendo Talento</h3></div></div>{[[Mail,"Scorre tutto Gmail","Carica automaticamente una pagina dopo l’altra."],[FileSearch,"Seleziona il curriculum","Distingue il CV dagli allegati accessori."],[Sparkles,"Analizza con Gemini","Estrae dati, percorso, competenze e foto."],[CheckCircle2,"Aggiorna senza duplicati","Conserva un profilo per persona e il CV più recente."]].map(([Icon,title,copy],i)=>{const I=Icon as typeof Mail;return <div className="process-step" key={String(title)}><span>{i+1}</span><i><I size={20}/></i><div><strong>{String(title)}</strong><p>{String(copy)}</p></div></div>})}</article>
+      <aside><article className="panel sync-card"><p className="eyebrow">Risultati sessione</p><h3>Riepilogo</h3><div className="sync-stat"><span>Nuovi candidati</span><b>{totals.imported}</b></div><div className="sync-stat"><span>Profili aggiornati</span><b>{totals.updated}</b></div><div className="sync-stat"><span>Già presenti</span><b>{totals.duplicate}</b></div><div className="sync-stat"><span>Errori</span><b>{totals.failed}</b></div>{!running&&overallProcessed>0&&<button className="secondary-button full" onClick={start}><RotateCcw size={15}/> Esegui nuovamente</button>}</article><article className="privacy-note"><ShieldCheck/><div><strong>Tieni aperta questa pagina</strong><p>Nel piano gratuito il browser coordina il lavoro. Puoi usare altre schede, ma non chiudere questa pagina finché l’importazione non è terminata.</p></div></article></aside></section>
+  </AppShell>
 }

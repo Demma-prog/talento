@@ -67,7 +67,7 @@ def _detect_portrait(image: Image.Image) -> PortraitDetection:
     image.save(buffer, format="JPEG", quality=82, optimize=True)
     client = genai.Client(api_key=settings.gemini_api_key)
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
+        model=settings.gemini_model,
         contents=[
             types.Part.from_bytes(data=buffer.getvalue(), mime_type="image/jpeg"),
             """Individua esclusivamente una chiara foto ritratto del candidato nel CV.
@@ -110,6 +110,30 @@ def ensure_bucket(database):
 def extract_and_store_photo(database, candidate_id: str, data: bytes, filename: str) -> bool:
     image = _preview(data, filename)
     photo = _crop(image, _detect_portrait(image))
+    ensure_bucket(database)
+    path = f"{candidate_id}.webp"
+    try:
+        database.storage.from_(BUCKET).remove([path])
+    except Exception:
+        pass
+    database.storage.from_(BUCKET).upload(path, photo, {"content-type": "image/webp", "upsert": "true"})
+    return True
+
+
+def extract_and_store_photo_from_cv_result(database, candidate_id: str, data: bytes, filename: str, extracted) -> bool:
+    suffix = filename.lower().rsplit(".", 1)[-1]
+    if suffix != "pdf":
+        return extract_and_store_photo(database, candidate_id, data, filename)
+    detection = PortraitDetection(
+        found=extracted.portrait_found,
+        box_2d=extracted.portrait_box_2d,
+        confidence=extracted.portrait_confidence,
+    )
+    image = _pdf_preview(data)
+    try:
+        photo = _crop(image, detection)
+    except ValueError:
+        photo = _crop(image, _detect_portrait(image))
     ensure_bucket(database)
     path = f"{candidate_id}.webp"
     try:

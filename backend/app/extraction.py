@@ -46,6 +46,9 @@ class CandidateExtraction(BaseModel):
     education: list[EducationExtraction]
     skills: list[SkillExtraction]
     confidence: float = Field(ge=0, le=1)
+    portrait_found: bool
+    portrait_box_2d: list[int] = Field(description="Foto profilo nella prima pagina: [ymin,xmin,ymax,xmax], coordinate 0-1000")
+    portrait_confidence: float = Field(ge=0, le=1)
 
 
 PROMPT = """Estrai dal curriculum i dati del candidato in modo fedele.
@@ -55,6 +58,10 @@ lo dichiara esplicitamente. Per le date usa YYYY-MM-DD quando il giorno è noto,
 YYYY-MM-01 quando sono noti solo anno e mese, e YYYY-01-01 quando è noto solo
 l'anno. La bio deve essere una sintesi professionale neutra di massimo 500
 caratteri. Inserisci soltanto esperienze, istruzione e competenze presenti nel CV.
+Se nella prima pagina è presente una chiara foto ritratto del candidato, imposta
+portrait_found=true e portrait_box_2d con [ymin,xmin,ymax,xmax] normalizzati da 0
+a 1000. Ignora loghi, icone, firme, gruppi e immagini decorative. Se il ritratto
+non è chiaro usa false, lista vuota e confidenza 0. Non classificare la persona.
 """
 
 
@@ -73,7 +80,7 @@ def extract_candidate(data: bytes, filename: str) -> CandidateExtraction:
         raise ValueError("I file DOC meno recenti non sono ancora supportati")
 
     response = client.models.generate_content(
-        model="gemini-3.6-flash",
+        model=settings.gemini_model,
         contents=content,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
