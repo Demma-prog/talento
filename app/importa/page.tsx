@@ -27,7 +27,7 @@ export default function ImportPage(){
 
   async function accessToken(){const {data}=await createClient().auth.getSession();if(!data.session)throw new Error("Sessione scaduta: accedi nuovamente");return data.session.access_token}
   async function apiRequest(path:string,body:unknown,retries=20):Promise<any>{
-    const api=process.env.NEXT_PUBLIC_API_URL;if(!api)throw new Error("Backend non configurato");
+    const api=process.env.NEXT_PUBLIC_BACKEND_URL||process.env.NEXT_PUBLIC_API_URL;if(!api)throw new Error("Backend non configurato");
     let lastError:Error|null=null;
     for(let attempt=0;attempt<=retries;attempt++){
       if(cancelRequested.current)throw new Error("Importazione interrotta");
