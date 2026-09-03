@@ -40,6 +40,8 @@ direttamente a Ollama tramite `localhost`.
   velocità storica reale di elaborazione dei CV.
 - Pagina “Da elaborare” convertita in monitor automatico con stato del worker Qwen, quantità in
   coda, velocità media e tempo rimanente.
+- Qwen locale ottimizzato per una sola analisi alla volta, modalità reasoning disattivata e contesto
+  ridotto a 8K per evitare la saturazione della GPU osservata con tre richieste concorrenti.
 - Supporto PDF, DOCX e DOC; l'analisi locale diretta supporta PDF e DOCX.
 - Estrazione di dati personali, bio, esperienze, istruzione e competenze.
 - Recupero locale delle fotografie incorporate nei PDF e DOCX.

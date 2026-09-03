@@ -95,9 +95,9 @@ def _extract_candidate_ollama(data: bytes, filename: str) -> CandidateExtraction
         raise ValueError("Il curriculum non contiene testo leggibile")
     schema = CandidateExtraction.model_json_schema()
     payload = json.dumps({
-        "model": settings.ollama_model, "stream": False, "format": schema,
-        "messages": [{"role":"user","content":f"{PROMPT}\n\nRispondi secondo questo schema JSON:\n{json.dumps(schema)}\n\nCURRICULUM:\n{text[:24000]}"}],
-        "options": {"temperature": 0, "num_ctx": 16384},
+        "model": settings.ollama_model, "stream": False, "think": False, "format": schema,
+        "messages": [{"role":"user","content":f"{PROMPT}\n\nRispondi secondo questo schema JSON:\n{json.dumps(schema)}\n\nCURRICULUM:\n{text[:16000]}"}],
+        "options": {"temperature": 0, "num_ctx": 8192},
     }).encode()
     request = Request(f"{settings.ollama_base_url.rstrip('/')}/api/chat", data=payload, headers={"Content-Type":"application/json"})
     with urlopen(request, timeout=180) as response:
