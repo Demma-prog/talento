@@ -62,6 +62,9 @@ class CheckpointRequest(BaseModel):
     complete: bool = False
 
 
+BACKGROUND_STATUSES = ["background_requested", "background_running"]
+
+
 def _header(headers: list[dict], name: str) -> str:
     wanted = name.lower()
     return next((item.get("value", "") for item in headers if item.get("name", "").lower() == wanted), "")
@@ -334,6 +337,47 @@ def import_position(user_id: str = Depends(require_user)):
         "mode": "incremental", "page_token": None,
         "after_epoch": max(0, int(completed.timestamp()) - 86400),
     }
+
+
+@router.post("/background/start")
+def start_background_import(user_id: str = Depends(require_user)):
+    database = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    active = database.table("import_runs").select("*").eq("requested_by", user_id).in_(
+        "status", BACKGROUND_STATUSES
+    ).order("created_at", desc=True).limit(1).execute().data or []
+    if active:
+        return {"job": active[0], "already_running": True}
+    row = database.table("import_runs").insert({
+        "requested_by": user_id, "status": "background_requested",
+        "gmail_cursor": json.dumps({"page_token": None, "after_epoch": _current_year_start_epoch(), "estimated_total": 0}),
+    }).execute().data[0]
+    return {"job": row, "already_running": False}
+
+
+@router.get("/background/status")
+def background_import_status(user_id: str = Depends(require_user)):
+    database = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    rows = database.table("import_runs").select("*").eq("requested_by", user_id).in_(
+        "status", [*BACKGROUND_STATUSES, "background_completed", "background_failed", "background_cancelled"]
+    ).order("created_at", desc=True).limit(1).execute().data or []
+    pending = database.table("pending_cv_imports").select("id", count="exact").eq("requested_by", user_id).execute()
+    if not rows:
+        return {"job": None, "pending": pending.count or 0}
+    job = rows[0]
+    try: progress = json.loads(job.get("gmail_cursor") or "{}")
+    except json.JSONDecodeError: progress = {}
+    return {"job": job, "progress": progress, "pending": pending.count or 0}
+
+
+@router.post("/background/cancel")
+def cancel_background_import(user_id: str = Depends(require_user)):
+    database = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    rows = database.table("import_runs").select("id").eq("requested_by", user_id).in_(
+        "status", BACKGROUND_STATUSES
+    ).execute().data or []
+    for row in rows:
+        database.table("import_runs").update({"status":"background_cancelled","completed_at":datetime.now(timezone.utc).isoformat()}).eq("id", row["id"]).execute()
+    return {"cancelled": len(rows)}
 
 
 @router.post("/checkpoint")

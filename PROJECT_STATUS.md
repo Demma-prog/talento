@@ -32,6 +32,8 @@ direttamente a Ollama tramite `localhost`.
 - Coda “Da elaborare” quando il motore AI non è disponibile.
 - Worker locale Qwen per elaborare automaticamente la coda.
 - Navigazione laterale immediata: l'animazione non ritarda più il cambio pagina.
+- Importazione Gmail persistente: il lavoro prosegue lasciando la pagina Importa CV.
+- Scansione Gmail e analisi Qwen eseguite in parallelo da due cicli indipendenti del worker locale.
 - Supporto PDF, DOCX e DOC; l'analisi locale diretta supporta PDF e DOCX.
 - Estrazione di dati personali, bio, esperienze, istruzione e competenze.
 - Recupero locale delle fotografie incorporate nei PDF e DOCX.
@@ -65,16 +67,13 @@ direttamente a Ollama tramite `localhost`.
 - Recupero fotografie su differenti modelli di curriculum.
 - Elaborazione completa della coda con Qwen e controllo dei tempi medi.
 - Aggiornamento immediato dei badge dopo modifiche, unioni e nuove importazioni.
-- Persistenza dell'importazione quando l'utente lascia la pagina Importa CV.
 
 ## Prossimi interventi
 
-1. Spostare il coordinamento dell'importazione dalla pagina a un processo persistente, così può
-   continuare mentre l'utente consulta le altre sezioni.
-2. Completare il collaudo autenticato delle funzioni pubblicate.
-3. Configurare l'avvio automatico del worker Qwen con Windows.
-4. Rendere visibile nell'interfaccia lo stato del worker locale.
-5. Valutare la qualità di Qwen sui CV reali e affinare prompt e classificazione.
+1. Completare il collaudo autenticato delle funzioni pubblicate.
+2. Configurare l'avvio automatico del worker Qwen con Windows.
+3. Rendere visibile nell'interfaccia lo stato del worker locale.
+4. Valutare la qualità di Qwen sui CV reali e affinare prompt e classificazione.
 
 ## Regola di manutenzione
 
