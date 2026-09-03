@@ -96,8 +96,8 @@ def _extract_candidate_ollama(data: bytes, filename: str) -> CandidateExtraction
     schema = CandidateExtraction.model_json_schema()
     payload = json.dumps({
         "model": settings.ollama_model, "stream": False, "format": schema,
-        "messages": [{"role":"user","content":f"{PROMPT}\n\nRispondi secondo questo schema JSON:\n{json.dumps(schema)}\n\nCURRICULUM:\n{text[:60000]}"}],
-        "options": {"temperature": 0},
+        "messages": [{"role":"user","content":f"{PROMPT}\n\nRispondi secondo questo schema JSON:\n{json.dumps(schema)}\n\nCURRICULUM:\n{text[:24000]}"}],
+        "options": {"temperature": 0, "num_ctx": 16384},
     }).encode()
     request = Request(f"{settings.ollama_base_url.rstrip('/')}/api/chat", data=payload, headers={"Content-Type":"application/json"})
     with urlopen(request, timeout=180) as response:

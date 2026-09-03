@@ -31,7 +31,7 @@ CV_EXTENSIONS = (".pdf", ".doc", ".docx")
 def _friendly_error(exc: Exception) -> str:
     message = str(exc).lower()
     if "429" in message or "quota" in message or "resource_exhausted" in message: return "Quota del servizio AI esaurita: riprova più tardi"
-    if "connection refused" in message or "urlopen error" in message: return "Qwen locale non raggiungibile: avvia Ollama sul PC"
+    if "connection refused" in message or "urlopen error" in message: return "CV acquisito: in attesa dell’elaborazione locale con Qwen"
     if "formato del curriculum non supportato" in message: return "Formato del curriculum non supportato"
     return "Analisi non riuscita; il CV potrà essere ritentato"
 
@@ -221,6 +221,9 @@ def _extract_candidate_with_retry(data: bytes, filename: str) -> CandidateExtrac
                 type(exc).__name__,
                 exc,
             )
+            message = str(exc).lower()
+            if settings.ai_provider.lower() == "ollama" and ("connection refused" in message or "urlopen error" in message):
+                break
             if attempt < 2:
                 time.sleep(1.5 * (attempt + 1))
     assert last_error is not None
