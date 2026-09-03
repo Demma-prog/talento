@@ -374,14 +374,23 @@ def background_import_status(user_id: str = Depends(require_user)):
                 if seconds > 0: durations.append(seconds)
             except (TypeError, ValueError, KeyError): pass
     seconds_per_cv = statistics.median(durations) if durations else 60.0
+    heartbeat = database.table("import_runs").select("completed_at").eq("requested_by", user_id).eq(
+        "status", "local_worker_online"
+    ).order("created_at", desc=True).limit(1).execute().data or []
+    worker_online = False
+    if heartbeat and heartbeat[0].get("completed_at"):
+        try:
+            seen = datetime.fromisoformat(heartbeat[0]["completed_at"].replace("Z", "+00:00"))
+            worker_online = (datetime.now(timezone.utc) - seen).total_seconds() < 45
+        except ValueError: pass
     if not rows:
-        return {"job": None, "pending": pending.count or 0, "seconds_per_cv":round(seconds_per_cv, 1), "estimated_seconds":round((pending.count or 0)*seconds_per_cv)}
+        return {"job": None, "pending": pending.count or 0, "worker_online":worker_online, "seconds_per_cv":round(seconds_per_cv, 1), "estimated_seconds":round((pending.count or 0)*seconds_per_cv)}
     job = rows[0]
     try: progress = json.loads(job.get("gmail_cursor") or "{}")
     except json.JSONDecodeError: progress = {}
     remaining_scan = max(0, (progress.get("estimated_total") or job.get("found_count") or 0) - (job.get("found_count") or 0))
     estimated_seconds = (pending.count or 0) * seconds_per_cv + remaining_scan * 0.5
-    return {"job": job, "progress": progress, "pending": pending.count or 0, "seconds_per_cv":round(seconds_per_cv, 1), "estimated_seconds":round(estimated_seconds)}
+    return {"job": job, "progress": progress, "pending": pending.count or 0, "worker_online":worker_online, "seconds_per_cv":round(seconds_per_cv, 1), "estimated_seconds":round(estimated_seconds)}
 
 
 @router.post("/background/cancel")

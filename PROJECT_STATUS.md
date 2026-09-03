@@ -38,6 +38,8 @@ direttamente a Ollama tramite `localhost`.
   errori generici di parsing JSON.
 - Conteggio Gmail esatto ripristinato nel lavoro persistente e tempo rimanente calcolato sulla
   velocità storica reale di elaborazione dei CV.
+- Pagina “Da elaborare” convertita in monitor automatico con stato del worker Qwen, quantità in
+  coda, velocità media e tempo rimanente.
 - Supporto PDF, DOCX e DOC; l'analisi locale diretta supporta PDF e DOCX.
 - Estrazione di dati personali, bio, esperienze, istruzione e competenze.
 - Recupero locale delle fotografie incorporate nei PDF e DOCX.

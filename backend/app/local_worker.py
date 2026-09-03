@@ -90,6 +90,16 @@ def process_cycle() -> tuple[int, int]:
     return processed, max(remaining, 0)
 
 
+def heartbeat_cycle() -> None:
+    database = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    users = database.table("gmail_connections").select("user_id").execute().data or []
+    now = datetime.now(timezone.utc).isoformat()
+    for user in users:
+        rows = database.table("import_runs").select("id").eq("requested_by", user["user_id"]).eq("status", "local_worker_online").limit(1).execute().data or []
+        if rows: database.table("import_runs").update({"completed_at":now}).eq("id", rows[0]["id"]).execute()
+        else: database.table("import_runs").insert({"requested_by":user["user_id"],"status":"local_worker_online","completed_at":now}).execute()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Elabora con Qwen i CV accodati da Talento")
     parser.add_argument("--once", action="store_true", help="Esegue un solo controllo e termina")
@@ -119,7 +129,13 @@ def main() -> None:
             except Exception as exc: print(f"Analisi non riuscita: {exc}"); processed = 0
             if not processed: time.sleep(max(10, args.interval))
 
-    threads=[threading.Thread(target=import_loop,daemon=True),threading.Thread(target=analysis_loop,daemon=True)]
+    def heartbeat_loop():
+        while True:
+            try: heartbeat_cycle()
+            except Exception as exc: print(f"Heartbeat non riuscito: {exc}")
+            time.sleep(15)
+
+    threads=[threading.Thread(target=import_loop,daemon=True),threading.Thread(target=analysis_loop,daemon=True),threading.Thread(target=heartbeat_loop,daemon=True)]
     for thread in threads: thread.start()
     for thread in threads: thread.join()
 
