@@ -233,6 +233,11 @@ def _process_downloaded(message: dict, attachment: dict, data: bytes):
     return _process_attachment_data(database, message, attachment, data)
 
 
+def _current_year_start_epoch() -> int:
+    now = datetime.now(timezone.utc)
+    return int(datetime(now.year, 1, 1, tzinfo=timezone.utc).timestamp())
+
+
 @router.post("/estimate")
 def estimate_remaining(payload: EstimateRequest, user_id: str = Depends(require_user)):
     service, database = _gmail_service(user_id)
@@ -280,20 +285,24 @@ def estimate_remaining(payload: EstimateRequest, user_id: str = Depends(require_
 @router.post("/position")
 def import_position(user_id: str = Depends(require_user)):
     database = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    year_start = _current_year_start_epoch()
     result = database.table("import_runs").select(
         "status,gmail_cursor,completed_at"
     ).eq("requested_by", user_id).in_(
         "status", ["archive_checkpoint", "archive_complete"]
     ).order("created_at", desc=True).limit(1).execute()
     if not result.data:
-        return {"mode": "archive", "page_token": None, "after_epoch": None}
+        return {"mode": "current_year", "page_token": None, "after_epoch": year_start}
     latest = result.data[0]
     if latest["status"] == "archive_checkpoint":
         try:
             cursor = json.loads(latest.get("gmail_cursor") or "{}")
         except json.JSONDecodeError:
             cursor = {"page_token": latest.get("gmail_cursor"), "after_epoch": None}
-        return {"mode": "resume", "page_token": cursor.get("page_token"), "after_epoch": cursor.get("after_epoch")}
+        checkpoint_after = cursor.get("after_epoch")
+        if checkpoint_after != year_start:
+            return {"mode": "current_year", "page_token": None, "after_epoch": year_start}
+        return {"mode": "resume", "page_token": cursor.get("page_token"), "after_epoch": checkpoint_after}
     completed = datetime.fromisoformat(latest["completed_at"].replace("Z", "+00:00"))
     return {
         "mode": "incremental", "page_token": None,
