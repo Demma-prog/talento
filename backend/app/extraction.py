@@ -70,6 +70,8 @@ def extract_candidate(data: bytes, filename: str) -> CandidateExtraction:
     suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
     if suffix == "pdf":
         content = [types.Part.from_bytes(data=data, mime_type="application/pdf"), PROMPT]
+    elif suffix == "doc":
+        content = [types.Part.from_bytes(data=data, mime_type="application/msword"), PROMPT]
     elif suffix == "docx":
         from io import BytesIO
         from docx import Document
@@ -77,7 +79,7 @@ def extract_candidate(data: bytes, filename: str) -> CandidateExtraction:
         text = "\n".join(paragraph.text for paragraph in document.paragraphs)
         content = [PROMPT, text]
     else:
-        raise ValueError("I file DOC meno recenti non sono ancora supportati")
+        raise ValueError("Formato del curriculum non supportato")
 
     response = client.models.generate_content(
         model=settings.gemini_model,

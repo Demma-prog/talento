@@ -30,7 +30,7 @@ CV_EXTENSIONS = (".pdf", ".doc", ".docx")
 def _friendly_error(exc: Exception) -> str:
     message = str(exc).lower()
     if "429" in message or "quota" in message or "resource_exhausted" in message: return "Quota gratuita Gemini esaurita: riprova dopo il rinnovo"
-    if "doc meno recenti" in message: return "Formato DOC non supportato: convertire in PDF o DOCX"
+    if "formato del curriculum non supportato" in message: return "Formato del curriculum non supportato"
     return "Analisi non riuscita; il CV potrà essere ritentato"
 
 
