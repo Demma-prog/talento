@@ -8,7 +8,9 @@ async function forward(method:"GET"|"POST",path:string){
   if(!api)return NextResponse.json({detail:"Backend non configurato"},{status:503});
   try{
     const response=await fetch(`${api}${path}`,{method,headers:{Authorization:`Bearer ${data.session.access_token}`,"Content-Type":"application/json"},body:method==="POST"?"{}":undefined,cache:"no-store",signal:AbortSignal.timeout(30000)});
-    return new NextResponse(await response.text(),{status:response.status,headers:{"Content-Type":"application/json","Cache-Control":"private, no-store"}});
+    const text=await response.text();
+    try{return NextResponse.json(JSON.parse(text),{status:response.status,headers:{"Cache-Control":"private, no-store"}})}
+    catch{return NextResponse.json({detail:text||`Risposta non valida dal backend (${response.status})`},{status:response.ok?502:response.status,headers:{"Cache-Control":"private, no-store"}})}
   }catch{return NextResponse.json({detail:"Il server non risponde. Riprova tra qualche secondo."},{status:504})}
 }
 export async function GET(){return forward("GET","/imports/background/status")}

@@ -34,6 +34,8 @@ direttamente a Ollama tramite `localhost`.
 - Navigazione laterale immediata: l'animazione non ritarda più il cambio pagina.
 - Importazione Gmail persistente: il lavoro prosegue lasciando la pagina Importa CV.
 - Scansione Gmail e analisi Qwen eseguite in parallelo da due cicli indipendenti del worker locale.
+- Risposte della pagina Importa validate anche quando Render restituisce un errore testuale, evitando
+  errori generici di parsing JSON.
 - Supporto PDF, DOCX e DOC; l'analisi locale diretta supporta PDF e DOCX.
 - Estrazione di dati personali, bio, esperienze, istruzione e competenze.
 - Recupero locale delle fotografie incorporate nei PDF e DOCX.
