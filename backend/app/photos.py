@@ -100,6 +100,34 @@ def _crop(image: Image.Image, detection: PortraitDetection) -> bytes:
     return output.getvalue()
 
 
+def _portrait_file(image: Image.Image) -> bytes:
+    portrait = ImageOps.fit(image.convert("RGB"), (256, 256), method=Image.Resampling.LANCZOS, centering=(0.5, 0.38))
+    output = BytesIO()
+    portrait.save(output, format="WEBP", quality=78, method=6)
+    return output.getvalue()
+
+
+def _embedded_portrait(data: bytes, filename: str) -> bytes:
+    suffix = filename.lower().rsplit(".", 1)[-1]
+    images: list[Image.Image] = []
+    if suffix == "pdf":
+        document = fitz.open(stream=data, filetype="pdf")
+        if document.page_count:
+            for item in document[0].get_images(full=True):
+                try: images.append(Image.open(BytesIO(document.extract_image(item[0])["image"])).convert("RGB"))
+                except Exception: continue
+    elif suffix == "docx":
+        with ZipFile(BytesIO(data)) as archive:
+            for name in archive.namelist():
+                if name.startswith("word/media/"):
+                    try: images.append(Image.open(BytesIO(archive.read(name))).convert("RGB"))
+                    except Exception: continue
+    candidates = [image for image in images if image.width >= 120 and image.height >= 140 and 0.52 <= image.width / image.height <= 1.18]
+    if not candidates:
+        raise ValueError("Nessuna fotografia incorporata affidabile")
+    return _portrait_file(max(candidates, key=lambda image: image.width * image.height))
+
+
 def ensure_bucket(database):
     try:
         database.storage.create_bucket(BUCKET, options={"public": False, "file_size_limit": 524288})
@@ -108,8 +136,11 @@ def ensure_bucket(database):
 
 
 def extract_and_store_photo(database, candidate_id: str, data: bytes, filename: str) -> bool:
-    image = _preview(data, filename)
-    photo = _crop(image, _detect_portrait(image))
+    if settings.ai_provider.lower() == "ollama":
+        photo = _embedded_portrait(data, filename)
+    else:
+        image = _preview(data, filename)
+        photo = _crop(image, _detect_portrait(image))
     ensure_bucket(database)
     path = f"{candidate_id}.webp"
     try:
@@ -121,6 +152,16 @@ def extract_and_store_photo(database, candidate_id: str, data: bytes, filename: 
 
 
 def extract_and_store_photo_from_cv_result(database, candidate_id: str, data: bytes, filename: str, extracted) -> bool:
+    if settings.ai_provider.lower() == "ollama":
+        photo = _embedded_portrait(data, filename)
+        ensure_bucket(database)
+        path = f"{candidate_id}.webp"
+        try:
+            database.storage.from_(BUCKET).remove([path])
+        except Exception:
+            pass
+        database.storage.from_(BUCKET).upload(path, photo, {"content-type": "image/webp", "upsert": "true"})
+        return True
     suffix = filename.lower().rsplit(".", 1)[-1]
     if suffix != "pdf":
         return extract_and_store_photo(database, candidate_id, data, filename)

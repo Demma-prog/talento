@@ -26,6 +26,8 @@ class CandidateUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=60)
     city: str | None = Field(default=None, max_length=200)
     bio: str | None = Field(default=None, max_length=2000)
+    job_category: str | None = None
+    protected_category: bool | None = None
     mark_verified: bool = False
 
 
@@ -93,6 +95,8 @@ def update_candidate(candidate_id: str, payload: CandidateUpdate, user_id: str =
     mark_verified = values.pop("mark_verified", False)
     if values.get("declared_gender") not in (None, "female", "male", "other"):
         raise HTTPException(status_code=422, detail="Valore del sesso dichiarato non valido")
+    if values.get("job_category") not in (None, "accounting", "logistics", "marketing", "cashier", "sales", "warehouse", "office", "other"):
+        raise HTTPException(status_code=422, detail="Categoria professionale non valida")
     for key, value in list(values.items()):
         if isinstance(value, str):
             values[key] = value.strip() or None
@@ -135,7 +139,7 @@ def retry_candidate_photo(candidate_id: str, user_id: str = Depends(require_user
         extract_and_store_photo(database, candidate_id, data, candidate["latest_cv_filename"])
         return {"saved": True}
     except Exception as exc:
-        detail = "Quota Gemini esaurita: riprova più tardi" if "429" in str(exc) else "Nessuna foto profilo affidabile trovata"
+        detail = "Quota del servizio AI esaurita: riprova più tardi" if "429" in str(exc) else "Nessuna foto profilo affidabile trovata"
         raise HTTPException(status_code=422, detail=detail) from exc
 
 

@@ -30,7 +30,8 @@ CV_EXTENSIONS = (".pdf", ".doc", ".docx")
 
 def _friendly_error(exc: Exception) -> str:
     message = str(exc).lower()
-    if "429" in message or "quota" in message or "resource_exhausted" in message: return "Quota gratuita Gemini esaurita: riprova dopo il rinnovo"
+    if "429" in message or "quota" in message or "resource_exhausted" in message: return "Quota del servizio AI esaurita: riprova più tardi"
+    if "connection refused" in message or "urlopen error" in message: return "Qwen locale non raggiungibile: avvia Ollama sul PC"
     if "formato del curriculum non supportato" in message: return "Formato del curriculum non supportato"
     return "Analisi non riuscita; il CV potrà essere ritentato"
 
@@ -43,6 +44,10 @@ class ImportRequest(BaseModel):
 
 class ProcessRequest(BaseModel):
     message_ids: list[str] = Field(min_length=1, max_length=3)
+
+
+class PendingProcessRequest(BaseModel):
+    limit: int = Field(default=3, ge=1, le=3)
 
 
 class EstimateRequest(BaseModel):
@@ -176,6 +181,8 @@ def _process_attachment_data(database, message: dict, attachment: dict, data: by
         "declared_gender": extracted.declared_gender, "email": extracted.email or parseaddr(sender)[1] or None,
         "normalized_email": email, "phone": extracted.phone, "normalized_phone": phone,
         "city": extracted.city, "bio": extracted.bio,
+        "job_category": extracted.job_category,
+        "protected_category": extracted.protected_category,
         "bio_source": "ai_summary" if extracted.bio else None,
         "latest_gmail_message_id": message_id,
         "latest_attachment_id": attachment["attachment_id"],
@@ -231,6 +238,22 @@ def _process_attachment(service, database, message: dict, attachment: dict):
 def _process_downloaded(message: dict, attachment: dict, data: bytes):
     database = create_client(settings.supabase_url, settings.supabase_service_role_key)
     return _process_attachment_data(database, message, attachment, data)
+
+
+def _queue_cv(database, user_id: str, message: dict, attachment: dict):
+    headers = message.get("payload", {}).get("headers", [])
+    received = datetime.fromtimestamp(int(message.get("internalDate", "0")) / 1000, tz=timezone.utc)
+    row = {
+        "requested_by": user_id, "gmail_message_id": message["id"],
+        "attachment_id": attachment["attachment_id"], "filename": attachment["filename"],
+        "subject": _header(headers, "Subject") or "Senza oggetto",
+        "sender": _header(headers, "From"), "received_at": received.isoformat(),
+        "status": "pending", "last_error": None,
+    }
+    result = database.table("pending_cv_imports").upsert(
+        row, on_conflict="requested_by,gmail_message_id"
+    ).execute()
+    return result.data[0] if result.data else row
 
 
 def _current_year_start_epoch() -> int:
@@ -376,7 +399,7 @@ def scan_cv_messages(payload: ImportRequest, user_id: str = Depends(require_user
             "has_more": bool(next_page_token),
             "estimated_total": listing.get("resultSizeEstimate", len(previews)),
             "expired_removed": expired_removed,
-            "message": "Scansione Gmail completata. Nessun CV è stato ancora inviato a Gemini.",
+            "message": "Scansione Gmail completata. Nessun CV è stato ancora inviato al motore AI.",
         }
     except HTTPException:
         raise
@@ -391,12 +414,10 @@ def scan_cv_messages(payload: ImportRequest, user_id: str = Depends(require_user
 
 @router.post("/process")
 def process_cv_messages(payload: ProcessRequest, user_id: str = Depends(require_user)):
-    if not settings.gemini_api_key:
-        raise HTTPException(status_code=503, detail="Gemini non configurato")
     service, database = _gmail_service(user_id)
     run = database.table("import_runs").insert({"requested_by": user_id, "status": "running"}).execute()
     run_id = run.data[0]["id"] if run.data else None
-    counts = {"imported": 0, "updated": 0, "duplicate": 0, "failed": 0}
+    counts = {"imported": 0, "updated": 0, "duplicate": 0, "failed": 0, "queued": 0}
     candidates = []
     errors = []
     prepared = []
@@ -406,6 +427,7 @@ def process_cv_messages(payload: ProcessRequest, user_id: str = Depends(require_
             attachment = _choose_cv_attachment(_attachments(message.get("payload", {})))
             if not attachment:
                 raise ValueError("Nessun allegato CV")
+            _queue_cv(database, user_id, message, attachment)
             encoded = service.users().messages().attachments().get(
                 userId="me", messageId=message_id, id=attachment["attachment_id"]
             ).execute().get("data", "")
@@ -419,19 +441,22 @@ def process_cv_messages(payload: ProcessRequest, user_id: str = Depends(require_
     # free instance memory and Gemini's free-tier burst limits.
     with ThreadPoolExecutor(max_workers=min(2, len(prepared)) or 1) as executor:
         futures = {
-            executor.submit(_process_downloaded, message, attachment, data): attachment
+            executor.submit(_process_downloaded, message, attachment, data): (message, attachment)
             for message, attachment, data in prepared
         }
         for future in as_completed(futures):
-            attachment = futures[future]
+            message, attachment = futures[future]
             try:
                 outcome, candidate_id = future.result()
                 counts[outcome] += 1
                 if candidate_id:
                     candidates.append(candidate_id)
+                database.table("pending_cv_imports").delete().eq("requested_by", user_id).eq("gmail_message_id", message["id"]).execute()
             except Exception as exc:
-                counts["failed"] += 1
-                errors.append(f"{attachment['filename']}: {_friendly_error(exc)}")
+                counts["queued"] += 1
+                friendly = _friendly_error(exc)
+                database.table("pending_cv_imports").update({"status":"failed","last_error":friendly}).eq("requested_by", user_id).eq("gmail_message_id", message["id"]).execute()
+                errors.append(f"{attachment['filename']}: {friendly}; aggiunto a Da elaborare")
 
     if run_id:
         database.table("import_runs").update({
@@ -441,3 +466,14 @@ def process_cv_messages(payload: ProcessRequest, user_id: str = Depends(require_
             "failed_count": counts["failed"], "completed_at": datetime.now(timezone.utc).isoformat(),
         }).eq("id", run_id).execute()
     return {"status": "completed", **counts, "candidate_ids": candidates, "errors": errors}
+
+
+@router.post("/pending/process")
+def process_pending(payload: PendingProcessRequest, user_id: str = Depends(require_user)):
+    database = create_client(settings.supabase_url, settings.supabase_service_role_key)
+    rows = database.table("pending_cv_imports").select("gmail_message_id").eq(
+        "requested_by", user_id
+    ).order("received_at", desc=True).limit(payload.limit).execute().data or []
+    if not rows:
+        return {"status":"completed","imported":0,"updated":0,"duplicate":0,"failed":0,"queued":0,"candidate_ids":[],"errors":[]}
+    return process_cv_messages(ProcessRequest(message_ids=[row["gmail_message_id"] for row in rows]), user_id)
