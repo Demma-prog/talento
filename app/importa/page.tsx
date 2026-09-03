@@ -4,7 +4,7 @@ import { AppShell } from "@/components/AppShell";
 import { CheckCircle2, FileSearch, Inbox, LoaderCircle, Mail, Play, ShieldCheck, Sparkles, Square } from "lucide-react";
 
 type Job={id:string;status:string;found_count:number;duplicate_count:number;failed_count:number;created_at:string;completed_at:string|null};
-type State={job:Job|null;progress?:{estimated_total?:number;last_batch_queued?:number};pending:number;seconds_per_cv?:number;estimated_seconds?:number};
+type State={job:Job|null;progress?:{estimated_total?:number;last_batch_queued?:number};pending:number;failed?:number;seconds_per_cv?:number;estimated_seconds?:number};
 const labels:Record<string,string>={background_requested:"In attesa del worker locale",background_running:"Importazione in corso",background_completed:"Importazione completata",background_failed:"Importazione interrotta",background_cancelled:"Importazione annullata"};
 function formatDuration(value:number){const seconds=Math.max(0,Math.round(value||0));if(seconds<60)return `${seconds} sec`;const minutes=Math.ceil(seconds/60);if(minutes<60)return `${minutes} min`;const hours=Math.floor(minutes/60),rest=minutes%60;return rest?`${hours} h ${rest} min`:`${hours} h`}
 

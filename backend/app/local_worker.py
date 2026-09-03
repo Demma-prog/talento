@@ -73,7 +73,7 @@ def process_cycle() -> tuple[int, int]:
     database = create_client(settings.supabase_url, settings.supabase_service_role_key)
     rows = database.table("pending_cv_imports").select("requested_by,gmail_message_id").order(
         "received_at"
-    ).limit(1).execute().data or []
+    ).eq("status", "pending").limit(1).execute().data or []
     processed = 0
     remaining = len(rows)
     by_user: dict[str, list[str]] = {}

@@ -42,6 +42,8 @@ direttamente a Ollama tramite `localhost`.
   coda, velocità media e tempo rimanente.
 - Qwen locale ottimizzato per una sola analisi alla volta, modalità reasoning disattivata e contesto
   ridotto a 8K per evitare la saturazione della GPU osservata con tre richieste concorrenti.
+- I CV non analizzabili passano nello stato “da rivedere” e non bloccano più l'intera coda; il
+  monitor distingue documenti in attesa e documenti falliti.
 - Supporto PDF, DOCX e DOC; l'analisi locale diretta supporta PDF e DOCX.
 - Estrazione di dati personali, bio, esperienze, istruzione e competenze.
 - Recupero locale delle fotografie incorporate nei PDF e DOCX.

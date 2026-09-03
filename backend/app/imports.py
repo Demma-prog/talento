@@ -360,7 +360,8 @@ def background_import_status(user_id: str = Depends(require_user)):
     rows = database.table("import_runs").select("*").eq("requested_by", user_id).in_(
         "status", [*BACKGROUND_STATUSES, "background_completed", "background_failed", "background_cancelled"]
     ).order("created_at", desc=True).limit(1).execute().data or []
-    pending = database.table("pending_cv_imports").select("id", count="exact").eq("requested_by", user_id).execute()
+    pending = database.table("pending_cv_imports").select("id", count="exact").eq("requested_by", user_id).eq("status", "pending").execute()
+    failed = database.table("pending_cv_imports").select("id", count="exact").eq("requested_by", user_id).eq("status", "failed").execute()
     history = database.table("import_runs").select("found_count,created_at,completed_at").in_(
         "status", ["local_completed"]
     ).gt("found_count", 0).order("created_at", desc=True).limit(20).execute().data or []
@@ -384,13 +385,13 @@ def background_import_status(user_id: str = Depends(require_user)):
             worker_online = (datetime.now(timezone.utc) - seen).total_seconds() < 45
         except ValueError: pass
     if not rows:
-        return {"job": None, "pending": pending.count or 0, "worker_online":worker_online, "seconds_per_cv":round(seconds_per_cv, 1), "estimated_seconds":round((pending.count or 0)*seconds_per_cv)}
+        return {"job": None, "pending": pending.count or 0, "failed":failed.count or 0, "worker_online":worker_online, "seconds_per_cv":round(seconds_per_cv, 1), "estimated_seconds":round((pending.count or 0)*seconds_per_cv)}
     job = rows[0]
     try: progress = json.loads(job.get("gmail_cursor") or "{}")
     except json.JSONDecodeError: progress = {}
     remaining_scan = max(0, (progress.get("estimated_total") or job.get("found_count") or 0) - (job.get("found_count") or 0))
     estimated_seconds = (pending.count or 0) * seconds_per_cv + remaining_scan * 0.5
-    return {"job": job, "progress": progress, "pending": pending.count or 0, "worker_online":worker_online, "seconds_per_cv":round(seconds_per_cv, 1), "estimated_seconds":round(estimated_seconds)}
+    return {"job": job, "progress": progress, "pending": pending.count or 0, "failed":failed.count or 0, "worker_online":worker_online, "seconds_per_cv":round(seconds_per_cv, 1), "estimated_seconds":round(estimated_seconds)}
 
 
 @router.post("/background/cancel")
