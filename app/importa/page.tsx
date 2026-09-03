@@ -9,6 +9,14 @@ type ScanMessage={message_id:string;subject:string;sender:string;received_at:str
 type ScanResult={found_count:number;messages:ScanMessage[];next_page_token:string|null;has_more:boolean;estimated_total:number};
 type Totals={imported:number;updated:number;duplicate:number;failed:number};
 const emptyTotals:Totals={imported:0,updated:0,duplicate:0,failed:0};
+function formatDuration(value:number){
+  const seconds=Math.max(0,Math.round(value||0));
+  if(seconds<60)return `${seconds}s`;
+  const minutes=Math.ceil(seconds/60);
+  if(minutes<60)return `${minutes} min`;
+  const hours=Math.floor(minutes/60),rest=minutes%60;
+  return rest?`${hours} h ${rest} min`:`${hours} h`;
+}
 
 export default function ImportPage(){
   const [running,setRunning]=useState(false);
@@ -19,6 +27,7 @@ export default function ImportPage(){
   const [pageProcessed,setPageProcessed]=useState(0);
   const [overallProcessed,setOverallProcessed]=useState(0);
   const [estimatedTotal,setEstimatedTotal]=useState(0);
+  const [secondsPerMessage,setSecondsPerMessage]=useState(0);
   const [queryAfterEpoch,setQueryAfterEpoch]=useState<number|null>(null);
   const [totals,setTotals]=useState<Totals>(emptyTotals);
   const [error,setError]=useState("");
@@ -49,18 +58,22 @@ export default function ImportPage(){
   }
   function stop(){cancelRequested.current=true;setPhase("Interruzione dopo il gruppo corrente...")}
   async function start(){
-    cancelRequested.current=false;setRunning(true);setComplete(false);setError("");setImportErrors([]);setTotals(emptyTotals);setOverallProcessed(0);setEstimatedTotal(0);setPageNumber(0);setCurrentPage(null);
+    cancelRequested.current=false;setRunning(true);setComplete(false);setError("");setImportErrors([]);setTotals(emptyTotals);setOverallProcessed(0);setEstimatedTotal(0);setSecondsPerMessage(0);setPageNumber(0);setCurrentPage(null);
     let cursor:string|null=null;let afterEpoch:number|null=null;let page=0;let processed=0;let estimate=0;let session={...emptyTotals};
     try{
       setPhase("Recupero dell’ultimo punto raggiunto...");
       const position=await apiRequest("/imports/position",{});
       cursor=position.page_token;afterEpoch=position.after_epoch;setQueryAfterEpoch(afterEpoch);
+      setPhase("Conteggio delle email ancora da verificare...");
+      const forecast=await apiRequest("/imports/estimate",{page_token:cursor,after_epoch:afterEpoch});
+      estimate=forecast.total_messages;setEstimatedTotal(estimate);setSecondsPerMessage(forecast.seconds_per_message||0);
+      setPhase(`Trovate ${estimate} email · tempo previsto ${formatDuration(forecast.estimated_seconds)}`);
       do{
         if(cancelRequested.current)break;
         setPhase("Ricerca delle email con curriculum...");
         const scan:ScanResult=await apiRequest("/imports",{max_messages:10,page_token:cursor,after_epoch:afterEpoch});
         page+=1;setPageNumber(page);setCurrentPage(scan);setPageProcessed(0);
-        estimate=Math.max(estimate,scan.estimated_total||0,processed+scan.messages.length);setEstimatedTotal(estimate);
+        estimate=Math.max(estimate,processed+scan.messages.length);setEstimatedTotal(estimate);
         for(let offset=0;offset<scan.messages.length;offset+=3){
           if(cancelRequested.current)break;
           const batch=scan.messages.slice(offset,offset+3);
@@ -109,10 +122,11 @@ export default function ImportPage(){
     finally{setRunning(false)}
   }
   const progress=complete?100:estimatedTotal?Math.min(99,Math.round(overallProcessed/estimatedTotal*100)):0;
+  const remainingSeconds=Math.max(0,estimatedTotal-overallProcessed)*secondsPerMessage;
 
   return <AppShell title="Importa curriculum" active="Importa CV">
     <section className="import-hero panel"><span className="import-icon"><Inbox/></span><div><p className="eyebrow">Importazione automatica</p><h2>Importa e organizza tutti i CV</h2><p>Un solo clic avvia l’intero archivio. Il sistema gestisce autonomamente i piccoli gruppi necessari per rispettare i limiti dei servizi gratuiti.</p></div>{running?<button className="secondary-button stop-import" onClick={stop}><Square size={15}/> Interrompi</button>:<button className="primary-button purple-button" onClick={overallProcessed&&!complete?resume:start}><Play/> {overallProcessed&&!complete?"Riprendi importazione":"Avvia importazione"}</button>}</section>
-    <section className="panel automatic-progress"><div className="panel-head"><div><p className="eyebrow">Stato del processo</p><h3>{phase}</h3></div><strong className="progress-percent">{progress}%</strong></div><div className="overall-progress"><i style={{width:`${progress}%`}}/></div><div className="progress-metrics"><span><b>{overallProcessed}</b>Email elaborate</span><span><b>{estimatedTotal||"—"}</b>Email stimate</span><span><b>{pageNumber||"—"}</b>Pagina Gmail</span><span><b>{currentPage?`${pageProcessed}/${currentPage.messages.length}`:"—"}</b>Blocco corrente</span></div>{error&&<div className="import-feedback import-error"><strong>Processo sospeso</strong><span>{error}</span></div>}{complete&&<div className="import-complete wide-complete"><CheckCircle2/> Tutte le email individuate sono state esaminate.</div>}</section>
+    <section className="panel automatic-progress"><div className="panel-head"><div><p className="eyebrow">Stato del processo</p><h3>{phase}</h3></div><strong className="progress-percent">{progress}%</strong></div><div className="overall-progress"><i style={{width:`${progress}%`}}/></div><div className="progress-metrics"><span><b>{overallProcessed}</b>Email elaborate</span><span><b>{estimatedTotal||"—"}</b>Email da verificare</span><span><b>{secondsPerMessage?formatDuration(remainingSeconds):"—"}</b>Tempo rimanente</span><span><b>{currentPage?`${pageProcessed}/${currentPage.messages.length}`:"—"}</b>Blocco corrente</span></div>{error&&<div className="import-feedback import-error"><strong>Processo sospeso</strong><span>{error}</span></div>}{complete&&<div className="import-complete wide-complete"><CheckCircle2/> Tutte le email individuate sono state esaminate.</div>}</section>
     {currentPage&&running&&<section className="panel current-batch"><div className="panel-head"><div><p className="eyebrow">Elaborazione in corso</p><h3>Pagina Gmail {pageNumber}</h3></div><LoaderCircle className="spin result-check"/></div><div className="scan-list compact-scan">{currentPage.messages.map((message,index)=><article key={message.message_id} className={index<pageProcessed?"scan-processed":""}><span className="candidate-avatar lavender">{index<pageProcessed?<CheckCircle2 size={17}/>:<Mail size={17}/>}</span><div><strong>{message.subject}</strong><p>{message.sender}</p></div><div className="scan-files">{message.attachments.map(file=><span key={file.filename}>{file.filename}</span>)}</div></article>)}</div></section>}
     <section className="import-grid"><article className="panel import-process"><div className="panel-head"><div><p className="eyebrow">Processo automatico</p><h3>Cosa sta facendo Talento</h3></div></div>{[[Mail,"Scorre tutto Gmail","Carica automaticamente una pagina dopo l’altra."],[FileSearch,"Seleziona il curriculum","Distingue il CV dagli allegati accessori."],[Sparkles,"Analizza con Gemini","Estrae dati, percorso, competenze e foto."],[CheckCircle2,"Aggiorna senza duplicati","Conserva un profilo per persona e il CV più recente."]].map(([Icon,title,copy],i)=>{const I=Icon as typeof Mail;return <div className="process-step" key={String(title)}><span>{i+1}</span><i><I size={20}/></i><div><strong>{String(title)}</strong><p>{String(copy)}</p></div></div>})}</article>
       <aside><article className="panel sync-card"><p className="eyebrow">Risultati sessione</p><h3>Riepilogo</h3><div className="sync-stat"><span>Nuovi candidati</span><b>{totals.imported}</b></div><div className="sync-stat"><span>Profili aggiornati</span><b>{totals.updated}</b></div><div className="sync-stat"><span>Già presenti</span><b>{totals.duplicate}</b></div><div className="sync-stat"><span>Errori</span><b>{totals.failed}</b></div>{!running&&overallProcessed>0&&<button className="secondary-button full" onClick={start}><RotateCcw size={15}/> Esegui nuovamente</button>}</article><article className="privacy-note"><ShieldCheck/><div><strong>Tieni aperta questa pagina</strong><p>Nel piano gratuito il browser coordina il lavoro. Puoi usare altre schede, ma non chiudere questa pagina finché l’importazione non è terminata.</p></div></article></aside></section>

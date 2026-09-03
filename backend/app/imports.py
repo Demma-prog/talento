@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import logging
+import statistics
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
@@ -42,6 +43,11 @@ class ImportRequest(BaseModel):
 
 class ProcessRequest(BaseModel):
     message_ids: list[str] = Field(min_length=1, max_length=3)
+
+
+class EstimateRequest(BaseModel):
+    page_token: str | None = None
+    after_epoch: int | None = None
 
 
 class CheckpointRequest(BaseModel):
@@ -225,6 +231,50 @@ def _process_attachment(service, database, message: dict, attachment: dict):
 def _process_downloaded(message: dict, attachment: dict, data: bytes):
     database = create_client(settings.supabase_url, settings.supabase_service_role_key)
     return _process_attachment_data(database, message, attachment, data)
+
+
+@router.post("/estimate")
+def estimate_remaining(payload: EstimateRequest, user_id: str = Depends(require_user)):
+    service, database = _gmail_service(user_id)
+    query = CV_QUERY
+    if payload.after_epoch:
+        query += f" after:{payload.after_epoch}"
+
+    total = 0
+    cursor = payload.page_token
+    while True:
+        request = {"userId": "me", "q": query, "maxResults": 500}
+        if cursor:
+            request["pageToken"] = cursor
+        listing = service.users().messages().list(**request).execute()
+        total += len(listing.get("messages", []))
+        cursor = listing.get("nextPageToken")
+        if not cursor:
+            break
+
+    history = database.table("import_runs").select(
+        "found_count,created_at,completed_at"
+    ).in_("status", ["completed", "completed_with_errors"]).gt(
+        "found_count", 0
+    ).order("created_at", desc=True).limit(40).execute().data
+    seconds_per_message = []
+    for row in history:
+        if not row.get("completed_at"):
+            continue
+        try:
+            started = datetime.fromisoformat(row["created_at"].replace("Z", "+00:00"))
+            finished = datetime.fromisoformat(row["completed_at"].replace("Z", "+00:00"))
+            duration = max(0.1, (finished - started).total_seconds())
+            seconds_per_message.append(duration / row["found_count"])
+        except (KeyError, TypeError, ValueError):
+            continue
+    seconds_each = statistics.median(seconds_per_message) if seconds_per_message else 10.0
+    return {
+        "total_messages": total,
+        "estimated_seconds": round(total * seconds_each),
+        "seconds_per_message": round(seconds_each, 1),
+        "sample_count": len(seconds_per_message),
+    }
 
 
 @router.post("/position")
