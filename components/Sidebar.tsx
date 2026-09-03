@@ -47,7 +47,7 @@ export function Sidebar({ active: activeFallback = "Dashboard" }: { active?: str
     event.preventDefault();
     if (target) return;
     setTarget(href);
-    window.setTimeout(() => router.push(href), 390);
+    window.requestAnimationFrame(() => router.push(href));
   }
 
   return (
