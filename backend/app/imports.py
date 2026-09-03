@@ -1,6 +1,8 @@
 import base64
 import hashlib
 import json
+import logging
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime, timedelta, timezone
 from email.utils import parseaddr
@@ -21,6 +23,7 @@ from .settings import settings
 
 
 router = APIRouter(prefix="/imports", tags=["imports"])
+logger = logging.getLogger(__name__)
 CV_QUERY = "has:attachment {filename:pdf filename:doc filename:docx}"
 CV_EXTENSIONS = (".pdf", ".doc", ".docx")
 
@@ -151,7 +154,7 @@ def _process_attachment_data(database, message: dict, attachment: dict, data: by
     if already.data:
         return "duplicate", None
 
-    extracted = extract_candidate(data, attachment["filename"])
+    extracted = _extract_candidate_with_retry(data, attachment["filename"])
     headers = message.get("payload", {}).get("headers", [])
     sender = _header(headers, "From")
     existing, email, phone = _find_candidate(database, extracted, sender)
@@ -189,6 +192,26 @@ def _process_attachment_data(database, message: dict, attachment: dict, data: by
     except Exception:
         pass
     return outcome, candidate_id
+
+
+def _extract_candidate_with_retry(data: bytes, filename: str) -> CandidateExtraction:
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            return extract_candidate(data, filename)
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Gemini analysis failed for %s (attempt %s/3): %s: %s",
+                filename,
+                attempt + 1,
+                type(exc).__name__,
+                exc,
+            )
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+    assert last_error is not None
+    raise last_error
 
 
 def _process_attachment(service, database, message: dict, attachment: dict):
@@ -333,7 +356,9 @@ def process_cv_messages(payload: ProcessRequest, user_id: str = Depends(require_
             counts["failed"] += 1
             errors.append(f"Email {message_id}: {_friendly_error(exc)}")
 
-    with ThreadPoolExecutor(max_workers=min(3, len(prepared)) or 1) as executor:
+    # Two concurrent multimodal PDF requests fit more reliably in Render's
+    # free instance memory and Gemini's free-tier burst limits.
+    with ThreadPoolExecutor(max_workers=min(2, len(prepared)) or 1) as executor:
         futures = {
             executor.submit(_process_downloaded, message, attachment, data): attachment
             for message, attachment, data in prepared
