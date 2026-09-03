@@ -22,6 +22,19 @@ def advance_import_job() -> bool:
         query = CV_QUERY
         if cursor.get("after_epoch"):
             query += f" after:{cursor['after_epoch']}"
+        if not cursor.get("count_is_exact"):
+            exact_total = 0
+            count_cursor = None
+            while True:
+                count_request = {"userId":"me", "q":query, "maxResults":500}
+                if count_cursor: count_request["pageToken"] = count_cursor
+                count_page = service.users().messages().list(**count_request).execute()
+                exact_total += len(count_page.get("messages", []))
+                count_cursor = count_page.get("nextPageToken")
+                if not count_cursor: break
+            cursor["estimated_total"] = exact_total
+            cursor["count_is_exact"] = True
+            database.table("import_runs").update({"status":"background_running","gmail_cursor":json.dumps(cursor)}).eq("id",job["id"]).execute()
         request = {"userId":"me", "q":query, "maxResults":10}
         if cursor.get("page_token"):
             request["pageToken"] = cursor["page_token"]
@@ -40,7 +53,7 @@ def advance_import_job() -> bool:
                 queued += 1
         next_page = listing.get("nextPageToken")
         scanned = (job.get("found_count") or 0) + len(listing.get("messages", []))
-        total = cursor.get("estimated_total") or listing.get("resultSizeEstimate") or scanned
+        total = cursor.get("estimated_total") or scanned
         progress = {"page_token":next_page, "after_epoch":cursor.get("after_epoch"), "estimated_total":max(total, scanned), "last_batch_queued":queued}
         values = {
             "status":"background_running" if next_page else "background_completed",

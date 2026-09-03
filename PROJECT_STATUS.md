@@ -36,6 +36,8 @@ direttamente a Ollama tramite `localhost`.
 - Scansione Gmail e analisi Qwen eseguite in parallelo da due cicli indipendenti del worker locale.
 - Risposte della pagina Importa validate anche quando Render restituisce un errore testuale, evitando
   errori generici di parsing JSON.
+- Conteggio Gmail esatto ripristinato nel lavoro persistente e tempo rimanente calcolato sulla
+  velocità storica reale di elaborazione dei CV.
 - Supporto PDF, DOCX e DOC; l'analisi locale diretta supporta PDF e DOCX.
 - Estrazione di dati personali, bio, esperienze, istruzione e competenze.
 - Recupero locale delle fotografie incorporate nei PDF e DOCX.

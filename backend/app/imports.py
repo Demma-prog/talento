@@ -361,12 +361,27 @@ def background_import_status(user_id: str = Depends(require_user)):
         "status", [*BACKGROUND_STATUSES, "background_completed", "background_failed", "background_cancelled"]
     ).order("created_at", desc=True).limit(1).execute().data or []
     pending = database.table("pending_cv_imports").select("id", count="exact").eq("requested_by", user_id).execute()
+    history = database.table("import_runs").select("found_count,created_at,completed_at").in_(
+        "status", ["local_completed"]
+    ).gt("found_count", 0).order("created_at", desc=True).limit(20).execute().data or []
+    durations = []
+    for item in history:
+        if item.get("completed_at"):
+            try:
+                started = datetime.fromisoformat(item["created_at"].replace("Z", "+00:00"))
+                finished = datetime.fromisoformat(item["completed_at"].replace("Z", "+00:00"))
+                seconds = (finished - started).total_seconds() / item["found_count"]
+                if seconds > 0: durations.append(seconds)
+            except (TypeError, ValueError, KeyError): pass
+    seconds_per_cv = statistics.median(durations) if durations else 60.0
     if not rows:
-        return {"job": None, "pending": pending.count or 0}
+        return {"job": None, "pending": pending.count or 0, "seconds_per_cv":round(seconds_per_cv, 1), "estimated_seconds":round((pending.count or 0)*seconds_per_cv)}
     job = rows[0]
     try: progress = json.loads(job.get("gmail_cursor") or "{}")
     except json.JSONDecodeError: progress = {}
-    return {"job": job, "progress": progress, "pending": pending.count or 0}
+    remaining_scan = max(0, (progress.get("estimated_total") or job.get("found_count") or 0) - (job.get("found_count") or 0))
+    estimated_seconds = (pending.count or 0) * seconds_per_cv + remaining_scan * 0.5
+    return {"job": job, "progress": progress, "pending": pending.count or 0, "seconds_per_cv":round(seconds_per_cv, 1), "estimated_seconds":round(estimated_seconds)}
 
 
 @router.post("/background/cancel")
@@ -506,8 +521,9 @@ def process_cv_messages(payload: ProcessRequest, user_id: str = Depends(require_
                 errors.append(f"{attachment['filename']}: {friendly}; aggiunto a Da elaborare")
 
     if run_id:
+        run_status = "local_completed" if settings.ai_provider.lower() == "ollama" and not counts["queued"] and not counts["failed"] else ("completed" if not counts["failed"] and not counts["queued"] else "completed_with_errors")
         database.table("import_runs").update({
-            "status": "completed" if not counts["failed"] else "completed_with_errors",
+            "status": run_status,
             "found_count": len(payload.message_ids), "imported_count": counts["imported"],
             "updated_count": counts["updated"], "duplicate_count": counts["duplicate"],
             "failed_count": counts["failed"], "completed_at": datetime.now(timezone.utc).isoformat(),
