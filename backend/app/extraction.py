@@ -1,8 +1,10 @@
 import re
 import json
+import subprocess
 from io import BytesIO
 from typing import Literal
 from urllib.request import Request, urlopen
+from zipfile import ZipFile
 
 from google import genai
 from google.genai import types
@@ -81,12 +83,34 @@ def _document_text(data: bytes, filename: str) -> str:
     if suffix == "pdf":
         import fitz
         document = fitz.open(stream=data, filetype="pdf")
-        return "\n".join(page.get_text() for page in document)
+        text = "\n".join(page.get_text() for page in document)
+        if text.strip(): return text
+        pages = []
+        for page in list(document)[:8]:
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+            pages.append(_ocr_image(pixmap.tobytes("png")))
+        return "\n".join(pages)
     if suffix == "docx":
         from docx import Document
         document = Document(BytesIO(data))
-        return "\n".join(paragraph.text for paragraph in document.paragraphs)
+        text = "\n".join(paragraph.text for paragraph in document.paragraphs)
+        if text.strip(): return text
+        images = []
+        with ZipFile(BytesIO(data)) as archive:
+            for name in archive.namelist():
+                if name.startswith("word/media/"):
+                    try: images.append(_ocr_image(archive.read(name)))
+                    except Exception: continue
+        return "\n".join(images)
     raise ValueError("Il modello locale supporta PDF e DOCX; convertire i file DOC")
+
+
+def _ocr_image(data: bytes) -> str:
+    result = subprocess.run(
+        [settings.tesseract_command, "stdin", "stdout", "-l", "eng", "--psm", "6"],
+        input=data, capture_output=True, check=True, timeout=90,
+    )
+    return result.stdout.decode("utf-8", errors="replace")
 
 
 def _extract_candidate_ollama(data: bytes, filename: str) -> CandidateExtraction:

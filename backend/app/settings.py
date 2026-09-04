@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     ai_provider: str = "ollama"
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "qwen3:4b"
+    tesseract_command: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
     google_client_id: str = ""
     google_client_secret: str = ""
     google_refresh_token: str = ""
