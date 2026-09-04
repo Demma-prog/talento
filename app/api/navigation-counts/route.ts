@@ -16,9 +16,9 @@ function duplicateGroupCount(rows:any[]){
 
 export async function GET(){
   const supabase=await createClient();
-  const {data:rows,error}=await supabase.from("candidates").select("first_name,last_name,birth_year,city,normalized_phone,birth_place,declared_gender,email,phone,bio,needs_review").limit(1000);
+  const {data:rows,error}=await supabase.from("candidates").select("first_name,last_name,birth_year,city,normalized_phone,birth_place,declared_gender,email,phone,bio,needs_review,missing_data_confirmed").limit(1000);
   if(error)return NextResponse.json({duplicates:0,incomplete:0,pending:0});
-  const incomplete=(rows??[]).filter(row=>!row.birth_year||!row.birth_place||!row.declared_gender||!row.email||!row.phone||!row.city||!row.bio||row.needs_review).length;
+  const incomplete=(rows??[]).filter(row=>!row.missing_data_confirmed&&(!row.birth_year||!row.birth_place||!row.declared_gender||!row.email||!row.phone||!row.city||!row.bio||row.needs_review)).length;
   const {count:pending}=await supabase.from("pending_cv_imports").select("id",{count:"exact",head:true});
   return NextResponse.json({duplicates:duplicateGroupCount(rows??[]),incomplete,pending:pending??0},{headers:{"Cache-Control":"private, no-store"}});
 }

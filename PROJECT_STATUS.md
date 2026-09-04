@@ -54,6 +54,10 @@ direttamente a Ollama tramite `localhost`.
 - Modifica manuale dei dati del candidato.
 - Inserimento rapido del sesso dalla pagina Dati incompleti con le scelte Donna, Uomo,
   Altro e Non indicato; il sistema non effettua deduzioni automatiche dal nome.
+- Conferma esplicita dei dati non disponibili per rimuovere una scheda dalla coda Dati incompleti;
+  un CV successivo riapre automaticamente il controllo.
+- Eliminazione manuale dalla coda dei CV la cui elaborazione è fallita, senza cancellare
+  l'email originale da Gmail.
 - Note interne e gestione dello stato della candidatura.
 - Rilevamento e unione controllata dei possibili duplicati.
 - Badge dinamici per duplicati, dati incompleti e CV da elaborare.
@@ -66,7 +70,7 @@ direttamente a Ollama tramite `localhost`.
 
 ## Configurazione applicata
 
-- Migrazioni Supabase `001`, `002` e `003` applicate.
+- Migrazioni Supabase `001`, `002`, `003` e `004` applicate.
 - Tabella `pending_cv_imports` disponibile.
 - Colonne `job_category` e `protected_category` disponibili sui candidati.
 - Modello Ollama installato: `qwen3:4b`.

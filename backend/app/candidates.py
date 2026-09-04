@@ -28,6 +28,7 @@ class CandidateUpdate(BaseModel):
     bio: str | None = Field(default=None, max_length=2000)
     job_category: str | None = None
     protected_category: bool | None = None
+    missing_data_confirmed: bool | None = None
     mark_verified: bool = False
 
 

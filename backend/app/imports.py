@@ -195,6 +195,7 @@ def _process_attachment_data(database, message: dict, attachment: dict, data: by
         "expires_at": (received + timedelta(days=365)).isoformat(),
         "extraction_confidence": extracted.confidence,
         "needs_review": extracted.confidence < 0.75 or not email,
+        "missing_data_confirmed": False,
     }
     if existing:
         saved = database.table("candidates").update(candidate).eq("id", existing["id"]).execute()
