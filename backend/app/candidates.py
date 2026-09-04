@@ -93,7 +93,7 @@ def update_candidate(candidate_id: str, payload: CandidateUpdate, user_id: str =
     _, database = _gmail_service(user_id)
     values = payload.model_dump(exclude_unset=True)
     mark_verified = values.pop("mark_verified", False)
-    if values.get("declared_gender") not in (None, "female", "male", "other"):
+    if values.get("declared_gender") not in (None, "female", "male", "other", "unspecified"):
         raise HTTPException(status_code=422, detail="Valore del sesso dichiarato non valido")
     if values.get("job_category") not in (None, "accounting", "logistics", "marketing", "cashier", "sales", "warehouse", "office", "other"):
         raise HTTPException(status_code=422, detail="Categoria professionale non valida")

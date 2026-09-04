@@ -52,6 +52,8 @@ direttamente a Ollama tramite `localhost`.
 - Un solo profilo per persona, aggiornato con il CV più recente.
 - Apertura autenticata del CV originale.
 - Modifica manuale dei dati del candidato.
+- Inserimento rapido del sesso dalla pagina Dati incompleti con le scelte Donna, Uomo,
+  Altro e Non indicato; il sistema non effettua deduzioni automatiche dal nome.
 - Note interne e gestione dello stato della candidatura.
 - Rilevamento e unione controllata dei possibili duplicati.
 - Badge dinamici per duplicati, dati incompleti e CV da elaborare.

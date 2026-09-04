@@ -4,7 +4,7 @@ import { CandidateClassification, CandidateEditor, CandidatePhoto, CvButton, Del
 import { ResumeSectionEditor } from "@/components/ResumeSectionEditor";
 import { createClient } from "@/lib/supabase/server";
 import { BriefcaseBusiness, CalendarDays, GraduationCap, Mail, MapPin, Phone, Sparkles, UserRound } from "lucide-react";
-const genderLabels:Record<string,string>={female:"Donna",male:"Uomo",other:"Altro"};
+const genderLabels:Record<string,string>={female:"Donna",male:"Uomo",other:"Altro",unspecified:"Non indicato"};
 const shortDate=(value?:string|null)=>value?new Intl.DateTimeFormat("it-IT",{month:"short",year:"numeric"}).format(new Date(value)):"—";
 const fullDate=(value?:string|null)=>value?new Intl.DateTimeFormat("it-IT",{day:"2-digit",month:"long",year:"numeric",hour:"2-digit",minute:"2-digit"}).format(new Date(value)):"—";
 export default async function CandidatePage({params,searchParams}:{params:Promise<{id:string}>;searchParams:Promise<{edit?:string}>}){
