@@ -88,6 +88,12 @@ direttamente a Ollama tramite `localhost`.
 - Elaborazione completa della coda con Qwen e controllo dei tempi medi.
 - Aggiornamento immediato dei badge dopo modifiche, unioni e nuove importazioni.
 
+## Operazioni sull'archivio
+
+- Il 4 settembre 2026 sono stati ricontrollati gli allegati PDF direttamente da Gmail e
+  rimossi 98 candidati il cui PDF più recente era completamente privo di testo nativo.
+  Le email Gmail non sono state modificate. Dopo l'operazione restano 746 candidati.
+
 ## Prossimi interventi
 
 1. Completare il collaudo autenticato delle funzioni pubblicate.
