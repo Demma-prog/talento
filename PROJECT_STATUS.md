@@ -58,6 +58,8 @@ direttamente a Ollama tramite `localhost`.
   un CV successivo riapre automaticamente il controllo.
 - Eliminazione manuale dalla coda dei CV la cui elaborazione è fallita, senza cancellare
   l'email originale da Gmail.
+- Elenco degli ultimi 50 candidati elaborati o aggiornati, con selezione multipla e
+  cancellazione controllata dall'archivio; le email Gmail rimangono invariate.
 - Note interne e gestione dello stato della candidatura.
 - Rilevamento e unione controllata dei possibili duplicati.
 - Badge dinamici per duplicati, dati incompleti e CV da elaborare.
